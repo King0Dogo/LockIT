@@ -62,7 +62,7 @@
         <!-- Device Admin receiver for legacy lock screen trigger -->
         <receiver
             android:name=".DeviceAdminRcvr"
-            android:label="Remote Companion Policy Manager"
+            android:label="LockIT Policy Manager"
             android:description="@string/device_admin_description"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
             android:exported="true">

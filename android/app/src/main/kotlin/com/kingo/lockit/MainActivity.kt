@@ -157,14 +157,14 @@ class MainActivity : ComponentActivity() {
     private fun requestAccessibilityPermission() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
         startActivity(intent)
-        Toast.makeText(this, "Locate 'Remote Companion' in list and enable it", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "Locate 'LockIT' in list and enable it", Toast.LENGTH_LONG).show()
     }
 
     private fun requestDeviceAdminPermission() {
         val adminComponent = ComponentName(this, DeviceAdminRcvr::class.java)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
             putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-            putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Enables Remote Companion to lock the screen instantly when commanded from web dashboard.")
+            putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Enables LockIT to lock the screen instantly when commanded from web dashboard.")
         }
         startActivity(intent)
     }
@@ -240,7 +240,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Remote Companion",
+                    text = "LockIT",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White

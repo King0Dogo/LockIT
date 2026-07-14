@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Remote Companion</string>
-    <string name="device_admin_description">Allows Remote Companion to lock the device screen immediately when commanded from your web admin dashboard.</string>
-    <string name="accessibility_desc">Enables Remote Companion to instantly lock your screen programmatically when triggered remotely.</string>
+    <string name="app_name">LockIT</string>
+    <string name="device_admin_description">Allows LockIT to lock the device screen immediately when commanded from your web admin dashboard.</string>
+    <string name="accessibility_desc">Enables LockIT to instantly lock your screen programmatically when triggered remotely.</string>
 </resources>

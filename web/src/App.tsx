@@ -256,7 +256,7 @@ export default function App() {
         <div className="glass-panel login-card">
           <div className="logo-section">
             <div className="logo-glow pulse-indicator">🔒</div>
-            <h2>Remote Companion</h2>
+            <h2>LockIT</h2>
             <p>Admin Portal Access</p>
           </div>
           <form onSubmit={handleLogin}>
@@ -369,7 +369,7 @@ export default function App() {
       <header className="glass-panel main-header">
         <div className="header-brand">
           <div className="dot pulse-indicator active-dot"></div>
-          <h1>Remote Companion</h1>
+          <h1>LockIT</h1>
           <span className="server-tag">Relay Active</span>
         </div>
         <button className="logout-btn" onClick={handleLogout}>Log Out</button>
