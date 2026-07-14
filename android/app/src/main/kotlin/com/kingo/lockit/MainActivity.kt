@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
     private var pollRunnable: Runnable? = null
 
     // Default production server URL
-    private val defaultServerUrl = "https://lockit-backend.onrender.com"
+    private val defaultServerUrl = "https://lockit-backend-ipfu.onrender.com"
 
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -511,6 +511,65 @@ class MainActivity : ComponentActivity() {
         var showAdvancedSettings by remember { mutableStateOf(false) }
         var customServerInput by remember { mutableStateOf(serverUrl) }
 
+        // Automate pairing key request on launch
+        val triggerPairRequest = {
+            isGeneratingKey = true
+            val requestBody = JsonObject().apply {
+                addProperty("deviceId", deviceId)
+                addProperty("deviceName", deviceName)
+            }
+            val request = Request.Builder()
+                .url("$serverUrl/api/device/pair-request")
+                .post(gson.toJson(requestBody).toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    mainHandler.post {
+                        isGeneratingKey = false
+                        Toast.makeText(this@MainActivity, "Network error connecting to $serverUrl", Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    mainHandler.post { isGeneratingKey = false }
+                    if (response.isSuccessful) {
+                        try {
+                            val body = response.body?.string() ?: ""
+                            val resObj = gson.fromJson(body, JsonObject::class.java)
+                            val key = resObj.get("pairingKey")?.asString ?: ""
+                            val expires = resObj.get("expiresInSeconds")?.asInt ?: 300
+                            mainHandler.post {
+                                pairingKey = key
+                                countdownSeconds = expires
+                                startPairingPoll(deviceId, serverUrl) { token ->
+                                    stopPairingPoll()
+                                    prefs.edit().putString("device_token", token).apply()
+                                    deviceToken = token
+                                    pairingKey = ""
+                                    countdownSeconds = 0
+                                    startForegroundService(Intent(this@MainActivity, CompanionService::class.java))
+                                    serviceActive = true
+                                    Toast.makeText(this@MainActivity, "Device paired successfully!", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            mainHandler.post { Toast.makeText(this@MainActivity, "Failed parsing key.", Toast.LENGTH_LONG).show() }
+                        }
+                    } else {
+                        mainHandler.post { Toast.makeText(this@MainActivity, "Server connection failed (${response.code}). Retrying...", Toast.LENGTH_LONG).show() }
+                    }
+                }
+            })
+        }
+
+        // Trigger pair status check or generate key automatically on screen entry
+        LaunchedEffect(deviceToken) {
+            if (deviceToken == null && pairingKey.isEmpty() && !isGeneratingKey) {
+                triggerPairRequest()
+            }
+        }
+
         LaunchedEffect(countdownSeconds) {
             if (countdownSeconds > 0) {
                 kotlinx.coroutines.delay(1000L)
@@ -668,89 +727,60 @@ class MainActivity : ComponentActivity() {
                     if (deviceToken == null) {
                         if (pairingKey.isEmpty()) {
                             Text(
-                                text = "Ready to Pair",
+                                text = "Pairing Connection Offline",
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White,
+                                color = Color(0xFFEF4444),
                                 fontSize = 14.sp
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Press the button below to generate a secure link key for this device.",
+                                text = "Unable to fetch a pairing key. Verify your server URL or network connection.",
                                 fontSize = 12.sp,
                                 color = Color(0xFF94A3B8),
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(
-                                onClick = {
-                                    isGeneratingKey = true
-                                    val requestBody = JsonObject().apply {
-                                        addProperty("deviceId", deviceId)
-                                        addProperty("deviceName", deviceName)
-                                    }
-                                    val request = Request.Builder()
-                                        .url("$serverUrl/api/device/pair-request")
-                                        .post(gson.toJson(requestBody).toRequestBody("application/json".toMediaType()))
-                                        .build()
-
-                                    client.newCall(request).enqueue(object : Callback {
-                                        override fun onFailure(call: Call, e: IOException) {
-                                            mainHandler.post {
-                                                isGeneratingKey = false
-                                                Toast.makeText(this@MainActivity, "Network error: check server address.", Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-
-                                        override fun onResponse(call: Call, response: Response) {
-                                            mainHandler.post { isGeneratingKey = false }
-                                            if (response.isSuccessful) {
-                                                try {
-                                                    val body = response.body?.string() ?: ""
-                                                    val resObj = gson.fromJson(body, JsonObject::class.java)
-                                                    val key = resObj.get("pairingKey")?.asString ?: ""
-                                                    val expires = resObj.get("expiresInSeconds")?.asInt ?: 300
-                                                    mainHandler.post {
-                                                        pairingKey = key
-                                                        countdownSeconds = expires
-                                                        startPairingPoll(deviceId, serverUrl) { token ->
-                                                            stopPairingPoll()
-                                                            prefs.edit().putString("device_token", token).apply()
-                                                            deviceToken = token
-                                                            pairingKey = ""
-                                                            countdownSeconds = 0
-                                                            startForegroundService(Intent(this@MainActivity, CompanionService::class.java))
-                                                            serviceActive = true
-                                                            Toast.makeText(this@MainActivity, "Device paired successfully!", Toast.LENGTH_LONG).show()
-                                                        }
-                                                    }
-                                                } catch (e: Exception) {
-                                                    mainHandler.post { Toast.makeText(this@MainActivity, "Failed parsing key.", Toast.LENGTH_LONG).show() }
-                                                }
-                                            } else {
-                                                mainHandler.post { Toast.makeText(this@MainActivity, "Server error: ${response.code}", Toast.LENGTH_LONG).show() }
-                                            }
-                                        }
-                                    })
-                                },
+                                onClick = { triggerPairRequest() },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(6.dp),
                                 enabled = !isGeneratingKey,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
                             ) {
-                                Text(if (isGeneratingKey) "Connecting..." else "Generate Pairing Key")
+                                Text(if (isGeneratingKey) "Connecting..." else "Retry Fetching Pairing Key")
                             }
                         } else {
-                            Text(text = "Enter key in Web or Phone console:", fontSize = 11.sp, color = Color(0xFF94A3B8))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = pairingKey,
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF10B981),
-                                fontFamily = FontFamily.Monospace,
-                                letterSpacing = 2.sp
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(text = "Enter key in Web or Phone console to pair:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                            Spacer(modifier = Modifier.height(14.dp))
+                            
+                            // Display 8 individual rounded monospace digit boxes
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                pairingKey.forEach { char ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 34.dp, height = 44.dp)
+                                            .background(
+                                                color = Color(0xFF1F2937),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = char.toString(),
+                                            color = Color(0xFF10B981),
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(14.dp))
                             val minutes = countdownSeconds / 60
                             val seconds = countdownSeconds % 60
                             Text(
@@ -759,17 +789,15 @@ class MainActivity : ComponentActivity() {
                                 color = Color(0xFFF59E0B),
                                 fontWeight = FontWeight.SemiBold
                             )
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Button(
+                            Spacer(modifier = Modifier.height(12.dp))
+                            TextButton(
                                 onClick = {
                                     stopPairingPoll()
                                     pairingKey = ""
                                     countdownSeconds = 0
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                                shape = RoundedCornerShape(6.dp)
+                                }
                             ) {
-                                Text("Cancel request", fontSize = 12.sp)
+                                Text("Cancel", color = Color(0xFF94A3B8), fontSize = 12.sp)
                             }
                         }
                     } else {
