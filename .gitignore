@@ -1,0 +1,27 @@
+# Dependency folders
+**/node_modules/
+
+# Compilation / Build outputs
+**/dist/
+**/build/
+**/app/build/
+*.apk
+
+# Local secrets & credentials
+.env
+**/local.properties
+
+# Android Studio / IntelliJ IDE cache
+**/.gradle/
+**/.idea/
+**/*.iml
+.navigation/
+
+# Database files
+backend/data/
+*.db
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
