@@ -62,6 +62,9 @@ class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pollRunnable: Runnable? = null
 
+    // Default production server URL
+    private val defaultServerUrl = "https://lockit-backend.onrender.com"
+
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -96,12 +99,17 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF090D16)
                 ) {
+                    val onboarded = remember { mutableStateOf(prefs.getBoolean("onboarded", false)) }
                     val appRole = remember { mutableStateOf(prefs.getString("app_role", null)) }
 
-                    when (appRole.value) {
-                        "companion" -> CompanionScreen(appRole)
-                        "controller" -> ControllerScreen(appRole)
-                        else -> RoleSelectionScreen(appRole)
+                    if (!onboarded.value) {
+                        OnboardingScreen(onboarded)
+                    } else {
+                        when (appRole.value) {
+                            "companion" -> CompanionScreen(appRole, onboarded)
+                            "controller" -> ControllerScreen(appRole)
+                            else -> RoleSelectionScreen(appRole)
+                        }
                     }
                 }
             }
@@ -182,7 +190,233 @@ class MainActivity : ComponentActivity() {
     }
 
     // ----------------------------------------------------
-    // Screen 1: Role Selection
+    // Screen 1: First-Launch Onboarding Wizard
+    // ----------------------------------------------------
+    @Composable
+    fun OnboardingScreen(onboarded: MutableState<Boolean>) {
+        var currentPage by remember { mutableStateOf(0) }
+
+        // Live checks for permissions
+        val isAccessibilityEnabled = LockAccessibilityService.isServiceRunning()
+        
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminComponent = ComponentName(this@MainActivity, DeviceAdminRcvr::class.java)
+        val isDeviceAdminEnabled = dpm.isAdminActive(adminComponent)
+
+        val hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(28.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header Page Indicators
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 10.dp)
+            ) {
+                for (i in 0..4) {
+                    Box(
+                        modifier = Modifier
+                            .height(6.dp)
+                            .width(if (i == currentPage) 24.dp else 8.dp)
+                            .background(
+                                color = if (i == currentPage) Color(0xFF3B82F6) else Color(0xFF334155),
+                                shape = RoundedCornerShape(3.dp)
+                            )
+                    )
+                }
+            }
+
+            // Page Contents
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                when (currentPage) {
+                    0 -> {
+                        Text(text = "🛡️", fontSize = 72.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = "Welcome to LockIT",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "LockIT enables secure, permission-based remote operations on trusted devices.\n\nLet's get this device set up with the required system access.",
+                            fontSize = 14.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = TextAlign.Center,
+                            lineHeight = 20.sp
+                        )
+                    }
+                    1 -> {
+                        Text(text = "♿", fontSize = 72.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = "Accessibility Lock Service",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Enables LockIT to lock your screen immediately when triggered from the controller.",
+                            fontSize = 14.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(30.dp))
+
+                        if (isAccessibilityEnabled) {
+                            Text(text = "✓ Service Enabled", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        } else {
+                            Button(
+                                onClick = { requestAccessibilityPermission() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Enable Accessibility")
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Note: On Android 13+, if you get a 'Restricted Setting' error, go to Settings -> Apps -> LockIT -> tap 3-dots in top right -> click 'Allow restricted settings', then try again.",
+                                fontSize = 11.sp,
+                                color = Color(0xFFEF4444),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                    2 -> {
+                        Text(text = "👑", fontSize = 72.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = "Device Administrator",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Used as a backup mechanism to trigger screen locks if the accessibility service is disconnected.",
+                            fontSize = 14.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(30.dp))
+
+                        if (isDeviceAdminEnabled) {
+                            Text(text = "✓ Admin Active", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        } else {
+                            Button(
+                                onClick = { requestDeviceAdminPermission() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Activate Device Admin")
+                            }
+                        }
+                    }
+                    3 -> {
+                        Text(text = "🔔", fontSize = 72.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = "Post Notifications",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Required on Android 13+ to display the background connection service notification and push alert banners.",
+                            fontSize = 14.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(30.dp))
+
+                        if (hasNotificationPermission) {
+                            Text(text = "✓ Notifications Allowed", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        } else {
+                            Button(
+                                onClick = { requestNotificationPermission() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Allow Notifications")
+                            }
+                        }
+                    }
+                    4 -> {
+                        Text(text = "✨", fontSize = 72.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            text = "Configuration Complete!",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "You are all set. You can now configure this device as either a Controller or a Companion client.",
+                            fontSize = 14.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            // Footer Control Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (currentPage > 0) {
+                    TextButton(onClick = { currentPage -= 1 }) {
+                        Text("Back", color = Color(0xFF94A3B8))
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(60.dp))
+                }
+
+                Button(
+                    onClick = {
+                        if (currentPage < 4) {
+                            currentPage += 1
+                        } else {
+                            prefs.edit().putBoolean("onboarded", true).apply()
+                            onboarded.value = true
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(if (currentPage == 4) "Get Started" else "Next")
+                }
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // Screen 2: Role Selection (Companion vs Controller)
     // ----------------------------------------------------
     @Composable
     fun RoleSelectionScreen(appRole: MutableState<String?>) {
@@ -196,14 +430,14 @@ class MainActivity : ComponentActivity() {
             Text(text = "🔒", fontSize = 56.sp)
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Welcome to LockIT",
+                text = "LockIT Roles",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Select this device's role:",
+                text = "Select this device's role in your LockIT system:",
                 fontSize = 14.sp,
                 color = Color(0xFF94A3B8),
                 textAlign = TextAlign.Center
@@ -251,13 +485,14 @@ class MainActivity : ComponentActivity() {
     }
 
     // ----------------------------------------------------
-    // Screen 2: Companion Mode (Controlled Phone)
+    // Screen 3: Companion Mode (Zero-Config Code Display)
     // ----------------------------------------------------
     @Composable
-    fun CompanionScreen(appRole: MutableState<String?>) {
+    fun CompanionScreen(appRole: MutableState<String?>, onboarded: MutableState<Boolean>) {
         val scrollState = rememberScrollState()
 
-        var serverUrlInput by remember { mutableStateOf(prefs.getString("server_url", "http://10.0.2.2:4000") ?: "http://10.0.2.2:4000") }
+        // Zero-Configuration fallback: Default directly to Render URL
+        val serverUrl = remember { prefs.getString("server_url", defaultServerUrl) ?: defaultServerUrl }
         var deviceToken by remember { mutableStateOf(prefs.getString("device_token", null)) }
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
@@ -273,16 +508,8 @@ class MainActivity : ComponentActivity() {
         var isDownloadingUpdate by remember { mutableStateOf(false) }
         var downloadProgress by remember { mutableStateOf(0) }
 
-        val hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-        val isAccessibilityEnabled = LockAccessibilityService.isServiceRunning()
-        
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminComponent = ComponentName(this@MainActivity, DeviceAdminRcvr::class.java)
-        val isDeviceAdminEnabled = dpm.isAdminActive(adminComponent)
+        var showAdvancedSettings by remember { mutableStateOf(false) }
+        var customServerInput by remember { mutableStateOf(serverUrl) }
 
         LaunchedEffect(countdownSeconds) {
             if (countdownSeconds > 0) {
@@ -295,6 +522,18 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // On companion screen load, if we have a token, start the service automatically
+        LaunchedEffect(deviceToken) {
+            if (deviceToken != null && !CompanionService.isServiceRunning) {
+                try {
+                    startForegroundService(Intent(this@MainActivity, CompanionService::class.java))
+                    serviceActive = true
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed auto-starting service", e)
+                }
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -302,15 +541,24 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Header with Reset Option
+            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "📱 Companion Mode", fontSize = 14.sp, color = Color(0xFF3B82F6), fontWeight = FontWeight.Bold)
                 Text(
-                    text = "Reset Role",
+                    text = "LockIT Companion",
+                    fontSize = 15.sp,
+                    color = Color(0xFF3B82F6),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        // Double click logo/text for advanced settings
+                        showAdvancedSettings = true
+                    }
+                )
+                Text(
+                    text = "Reset",
                     color = Color(0xFFEF4444),
                     fontSize = 12.sp,
                     modifier = Modifier.clickable {
@@ -327,36 +575,42 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(text = "🔒", fontSize = 36.sp)
+                Text(text = "🔒", fontSize = 48.sp)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = "LockIT Client", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(text = "Companion Mode", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(text = "Link to control from another device", fontSize = 12.sp, color = Color(0xFF94A3B8))
             }
 
-            // Connection Status
+            // Connection Link Status Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "Connection Link Status", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(
-                                    color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
-                                    shape = RoundedCornerShape(50)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (serviceActive) "Linked & Background Service Active" else "Disconnected / Idle",
-                            color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "Status", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
+                                        shape = RoundedCornerShape(50)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (serviceActive) "Connected" else "Awaiting Link",
+                                color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     if (deviceToken != null) {
@@ -377,7 +631,7 @@ class MainActivity : ComponentActivity() {
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text(if (serviceActive) "Pause Link" else "Resume Link", fontSize = 12.sp)
+                                Text(if (serviceActive) "Pause Service" else "Resume Service", fontSize = 11.sp)
                             }
                             Button(
                                 onClick = {
@@ -394,51 +648,48 @@ class MainActivity : ComponentActivity() {
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Unpair", fontSize = 12.sp)
+                                Text("Unpair", fontSize = 11.sp)
                             }
                         }
                     }
                 }
             }
 
-            // Pairing Form
+            // Zero-Config Pairing Key Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "Link to Web / Phone Controller", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(10.dp))
-
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     if (deviceToken == null) {
-                        OutlinedTextField(
-                            value = serverUrlInput,
-                            onValueChange = { serverUrlInput = it },
-                            label = { Text("Server URL", color = Color(0xFF94A3B8)) },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color(0xFF3B82F6),
-                                unfocusedBorderColor = Color(0xFF334155)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
                         if (pairingKey.isEmpty()) {
+                            Text(
+                                text = "Ready to Pair",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Press the button below to generate a secure link key for this device.",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
                             Button(
                                 onClick = {
                                     isGeneratingKey = true
-                                    prefs.edit().putString("server_url", serverUrlInput).apply()
-
                                     val requestBody = JsonObject().apply {
                                         addProperty("deviceId", deviceId)
                                         addProperty("deviceName", deviceName)
                                     }
                                     val request = Request.Builder()
-                                        .url("$serverUrlInput/api/device/pair-request")
+                                        .url("$serverUrl/api/device/pair-request")
                                         .post(gson.toJson(requestBody).toRequestBody("application/json".toMediaType()))
                                         .build()
 
@@ -461,7 +712,7 @@ class MainActivity : ComponentActivity() {
                                                     mainHandler.post {
                                                         pairingKey = key
                                                         countdownSeconds = expires
-                                                        startPairingPoll(deviceId, serverUrlInput) { token ->
+                                                        startPairingPoll(deviceId, serverUrl) { token ->
                                                             stopPairingPoll()
                                                             prefs.edit().putString("device_token", token).apply()
                                                             deviceToken = token
@@ -486,138 +737,58 @@ class MainActivity : ComponentActivity() {
                                 enabled = !isGeneratingKey,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
                             ) {
-                                Text(if (isGeneratingKey) "Generating Key..." else "Generate Pairing Key")
+                                Text(if (isGeneratingKey) "Connecting..." else "Generate Pairing Key")
                             }
                         } else {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
+                            Text(text = "Enter key in Web or Phone console:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = pairingKey,
+                                fontSize = 34.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF10B981),
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 2.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val minutes = countdownSeconds / 60
+                            val seconds = countdownSeconds % 60
+                            Text(
+                                text = String.format("Expires in: %02d:%02d", minutes, seconds),
+                                fontSize = 13.sp,
+                                color = Color(0xFFF59E0B),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    stopPairingPoll()
+                                    pairingKey = ""
+                                    countdownSeconds = 0
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                                shape = RoundedCornerShape(6.dp)
                             ) {
-                                Text(text = "Enter key in Web or Phone console:", fontSize = 11.sp, color = Color(0xFF94A3B8))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = pairingKey,
-                                    fontSize = 28.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF10B981),
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 2.sp
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                val minutes = countdownSeconds / 60
-                                val seconds = countdownSeconds % 60
-                                Text(
-                                    text = String.format("Expires in: %02d:%02d", minutes, seconds),
-                                    fontSize = 12.sp,
-                                    color = Color(0xFFF59E0B),
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Button(
-                                    onClick = {
-                                        stopPairingPoll()
-                                        pairingKey = ""
-                                        countdownSeconds = 0
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text("Cancel request")
-                                }
+                                Text("Cancel request", fontSize = 12.sp)
                             }
                         }
                     } else {
-                        Text("Device Name: $deviceName", color = Color.White, fontSize = 13.sp)
-                        Text("Device ID: $deviceId", color = Color(0xFF94A3B8), fontSize = 11.sp)
-                        Text("Connected Server: $serverUrlInput", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                        Text(text = "Linked & Connected", fontWeight = FontWeight.Bold, color = Color(0xFF10B981), fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Device Name: $deviceName", color = Color.White, fontSize = 12.sp)
+                        Text("Device ID: $deviceId", color = Color(0xFF94A3B8), fontSize = 10.sp)
                     }
                 }
             }
 
-            // Permissions Checklist
+            // Updater card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "Device Permissions Checklist", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Accessibility Service", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            Text(text = if (isAccessibilityEnabled) "Active" else "Inactive", color = if (isAccessibilityEnabled) Color(0xFF10B981) else Color(0xFFEF4444), fontSize = 11.sp)
-                        }
-                        Button(
-                            onClick = { requestAccessibilityPermission() },
-                            colors = ButtonDefaults.buttonColors(containerColor = if (isAccessibilityEnabled) Color(0xFF1E293B) else Color(0xFF3B82F6)),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text("Configure", fontSize = 11.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                    HorizontalDivider(color = Color(0xFF1E293B))
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Device Administrator", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            Text(text = if (isDeviceAdminEnabled) "Active" else "Inactive", color = if (isDeviceAdminEnabled) Color(0xFF10B981) else Color(0xFFEF4444), fontSize = 11.sp)
-                        }
-                        Button(
-                            onClick = { requestDeviceAdminPermission() },
-                            colors = ButtonDefaults.buttonColors(containerColor = if (isDeviceAdminEnabled) Color(0xFF1E293B) else Color(0xFF3B82F6)),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text("Configure", fontSize = 11.sp)
-                        }
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        HorizontalDivider(color = Color(0xFF1E293B))
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Post Notifications", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(text = if (hasNotificationPermission) "Allowed" else "Not Allowed", color = if (hasNotificationPermission) Color(0xFF10B981) else Color(0xFFEF4444), fontSize = 11.sp)
-                            }
-                            Button(
-                                onClick = { requestNotificationPermission() },
-                                colors = ButtonDefaults.buttonColors(containerColor = if (hasNotificationPermission) Color(0xFF1E293B) else Color(0xFF3B82F6)),
-                                shape = RoundedCornerShape(6.dp)
-                            ) {
-                                Text("Configure", fontSize = 11.sp)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Update checker
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "App Updates", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    Text(text = "Software Updates", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(text = "Status: $updateStatusText", color = Color(0xFF94A3B8), fontSize = 12.sp)
                     
@@ -678,17 +849,75 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
+            // Permissions link footer
+            Text(
+                text = "Reconfigure System Permissions",
+                color = Color(0xFF3B82F6),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp)
+                    .clickable {
+                        prefs.edit().putBoolean("onboarded", false).apply()
+                        onboarded.value = false
+                        renderContent()
+                    }
+            )
+        }
+
+        // Advanced Settings Dialog (Hidden power feature)
+        if (showAdvancedSettings) {
+            AlertDialog(
+                onDismissRequest = { showAdvancedSettings = false },
+                title = { Text("Advanced Server Settings", color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("You can change the target WebSocket relay server address if you host it elsewhere.", fontSize = 12.sp, color = Color(0xFF94A3B8))
+                        OutlinedTextField(
+                            value = customServerInput,
+                            onValueChange = { customServerInput = it },
+                            label = { Text("Server URL", color = Color(0xFF94A3B8)) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFF3B82F6)
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            prefs.edit().putString("server_url", customServerInput).apply()
+                            showAdvancedSettings = false
+                            Toast.makeText(this@MainActivity, "Server URL updated!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                    ) {
+                        Text("Save")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAdvancedSettings = false }) {
+                        Text("Cancel", color = Color(0xFF94A3B8))
+                    }
+                },
+                containerColor = Color(0xFF111827)
+            )
         }
     }
 
     // ----------------------------------------------------
-    // Screen 3: Controller Mode (Dashboard Phone)
+    // Screen 4: Controller Mode (Dashboard Phone)
     // ----------------------------------------------------
     @Composable
     fun ControllerScreen(appRole: MutableState<String?>) {
         val scrollState = rememberScrollState()
 
-        var serverUrlInput by remember { mutableStateOf(prefs.getString("controller_server_url", "http://10.0.2.2:4000") ?: "http://10.0.2.2:4000") }
+        var serverUrlInput by remember { mutableStateOf(prefs.getString("controller_server_url", defaultServerUrl) ?: defaultServerUrl) }
         var adminPasscode by remember { mutableStateOf("") }
         var adminToken by remember { mutableStateOf(prefs.getString("admin_token", null)) }
 
@@ -697,7 +926,6 @@ class MainActivity : ComponentActivity() {
         var pairingKey by remember { mutableStateOf("") }
         var pairingMsg by remember { mutableStateOf("") }
 
-        // Fetch list of devices
         val fetchDevicesList = {
             if (adminToken != null) {
                 isFetchingDevices = true
@@ -752,7 +980,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Trigger command dispatch
         val dispatchCommand = { deviceId: String, command: String, payload: JsonObject? ->
             if (adminToken != null) {
                 val requestBody = JsonObject().apply {
@@ -788,7 +1015,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Trigger pairing check
         val executePairing = {
             if (adminToken != null && pairingKey.length == 8) {
                 pairingMsg = "Pairing..."
@@ -822,7 +1048,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Fetch list on screen entry
         LaunchedEffect(adminToken) {
             if (adminToken != null) {
                 fetchDevicesList()
@@ -836,15 +1061,15 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Header with Reset Option
+            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "🎮 Controller Mode", fontSize = 14.sp, color = Color(0xFF8B5CF6), fontWeight = FontWeight.Bold)
+                Text(text = "LockIT Controller", fontSize = 14.sp, color = Color(0xFF8B5CF6), fontWeight = FontWeight.Bold)
                 Text(
-                    text = "Reset Role",
+                    text = "Reset",
                     color = Color(0xFFEF4444),
                     fontSize = 12.sp,
                     modifier = Modifier.clickable {
@@ -859,9 +1084,9 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(text = "🎮", fontSize = 36.sp)
+                Text(text = "🎮", fontSize = 48.sp)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = "LockIT Dashboard", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(text = "Controller Dashboard", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
 
             if (adminToken == null) {
@@ -938,7 +1163,7 @@ class MainActivity : ComponentActivity() {
                                                 mainHandler.post { Toast.makeText(this@MainActivity, "Failed parsing login token.", Toast.LENGTH_SHORT).show() }
                                             }
                                         } else {
-                                            mainHandler.post { Toast.makeText(this@MainActivity, "Invalid Admin passcode.", Toast.LENGTH_LONG).show() }
+                                            mainHandler.post { Toast.makeText(this@MainActivity, "Invalid passcode.", Toast.LENGTH_LONG).show() }
                                         }
                                     }
                                 })
@@ -952,8 +1177,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                // Logged in: Devices Grid and Action Panel
-                
                 // Pair Device Card
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
