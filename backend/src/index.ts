@@ -98,9 +98,9 @@ app.post('/api/device/pair-request', async (req, res) => {
 
     console.log(`[Pairing] Generated key ${key} for device '${deviceName}' (expires at ${expiresAt})`);
     return res.json({ pairingKey: key, expiresInSeconds: 300 });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in pairing request:', error);
-    return res.status(500).json({ error: 'Database error generating key.' });
+    return res.status(500).json({ error: `Database error generating key: ${error?.message || error}` });
   }
 });
 
@@ -117,8 +117,9 @@ app.get('/api/device/pair-status', async (req, res) => {
       return res.json({ paired: true, token: device.token });
     }
     return res.json({ paired: false });
-  } catch (error) {
-    return res.status(500).json({ error: 'Database verification failed.' });
+  } catch (error: any) {
+    console.error('Error in pair status check:', error);
+    return res.status(500).json({ error: `Database verification failed: ${error?.message || error}` });
   }
 });
 
