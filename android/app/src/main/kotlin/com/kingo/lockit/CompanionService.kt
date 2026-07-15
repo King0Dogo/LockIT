@@ -94,7 +94,7 @@ class CompanionService : Service() {
     // ----------------------------------------------------
     private fun initializeSocket() {
         val prefs = getSharedPreferences("lockit_prefs", Context.MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", "http://10.0.2.2:4000") ?: "http://10.0.2.2:4000"
+        val serverUrl = prefs.getString("server_url", "https://lockit-backend-ipfu.onrender.com") ?: "https://lockit-backend-ipfu.onrender.com"
         val deviceToken = prefs.getString("device_token", null)
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
 
@@ -182,20 +182,48 @@ class CompanionService : Service() {
                     }
                 }
 
+                logLocalAudit("Screen Lock", if (success) "SUCCESS" else "FAILED", errorMsg)
                 sendAck(commandId, success, errorMsg)
             }
             "ring" -> {
                 val success = triggerRingtoneAlert()
+                logLocalAudit("Sound Alert Played", if (success) "SUCCESS" else "FAILED", if (success) null else "Could not play ringtone.")
                 sendAck(commandId, success, if (success) null else "Could not play alert ringtone.")
             }
             "notify" -> {
                 val message = payload?.optString("message") ?: "Remote Alert Triggered!"
                 showUserAlertNotification(message)
+                logLocalAudit("Alert Notification Displayed", "SUCCESS", "Message: $message")
                 sendAck(commandId, true, null)
             }
             else -> {
+                logLocalAudit("Unknown Command: $command", "FAILED", "Error: Unknown command")
                 sendAck(commandId, false, "Unknown remote command: $command")
             }
+        }
+    }
+
+    private fun logLocalAudit(commandName: String, status: String, details: String?) {
+        try {
+            val prefs = getSharedPreferences("lockit_prefs", Context.MODE_PRIVATE)
+            val auditsJson = prefs.getString("local_audits", "[]") ?: "[]"
+            val auditList = gson.fromJson(auditsJson, Array<JsonObject>::class.java).toMutableList()
+            
+            val newAudit = JsonObject().apply {
+                addProperty("command", commandName)
+                addProperty("timestamp", java.text.DateFormat.getDateTimeInstance().format(java.util.Date()))
+                addProperty("status", status)
+                addProperty("details", details ?: "")
+            }
+            
+            auditList.add(0, newAudit)
+            if (auditList.size > 50) {
+                auditList.removeAt(auditList.size - 1)
+            }
+            
+            prefs.edit().putString("local_audits", gson.toJson(auditList)).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving local audit log", e)
         }
     }
 

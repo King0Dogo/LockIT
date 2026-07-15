@@ -1,6 +1,7 @@
 package com.kingo.lockit
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -18,9 +19,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -485,13 +488,13 @@ class MainActivity : ComponentActivity() {
     }
 
     // ----------------------------------------------------
-    // Screen 3: Companion Mode (Zero-Config Code Display)
+    // Screen 3: Companion Mode (Premium Tabbed Interface)
     // ----------------------------------------------------
     @Composable
     fun CompanionScreen(appRole: MutableState<String?>, onboarded: MutableState<Boolean>) {
+        var currentTab by remember { mutableStateOf(0) }
         val scrollState = rememberScrollState()
 
-        // Zero-Configuration fallback: Default directly to Render URL
         val serverUrl = remember { prefs.getString("server_url", defaultServerUrl) ?: defaultServerUrl }
         var deviceToken by remember { mutableStateOf(prefs.getString("device_token", null)) }
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
@@ -502,16 +505,20 @@ class MainActivity : ComponentActivity() {
         var isGeneratingKey by remember { mutableStateOf(false) }
         var serviceActive by remember { mutableStateOf(CompanionService.isServiceRunning) }
 
-        val updateChecker = remember { UpdateChecker(this@MainActivity) }
-        var updateStatusText by remember { mutableStateOf("Up to date (v1.0.0)") }
-        var updateDownloadUrl by remember { mutableStateOf<String?>(null) }
-        var isDownloadingUpdate by remember { mutableStateOf(false) }
-        var downloadProgress by remember { mutableStateOf(0) }
-
         var showAdvancedSettings by remember { mutableStateOf(false) }
         var customServerInput by remember { mutableStateOf(serverUrl) }
 
-        // Automate pairing key request on launch
+        // Fetch local audits list
+        val localAuditsJson = remember { prefs.getString("local_audits", "[]") ?: "[]" }
+        val auditsList = remember(localAuditsJson) {
+            try {
+                gson.fromJson(localAuditsJson, JsonArray::class.java)
+            } catch (e: Exception) {
+                JsonArray()
+            }
+        }
+
+        // Automatic pairing request handler
         val triggerPairRequest = {
             isGeneratingKey = true
             val requestBody = JsonObject().apply {
@@ -527,19 +534,21 @@ class MainActivity : ComponentActivity() {
                 override fun onFailure(call: Call, e: IOException) {
                     mainHandler.post {
                         isGeneratingKey = false
-                        Toast.makeText(this@MainActivity, "Network error connecting to $serverUrl", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@MainActivity, "Network error: check connection.", Toast.LENGTH_LONG).show()
                     }
                 }
 
                 override fun onResponse(call: Call, response: Response) {
                     mainHandler.post { isGeneratingKey = false }
+                    val bodyString = response.body?.string() ?: ""
                     if (response.isSuccessful) {
                         try {
-                            val body = response.body?.string() ?: ""
-                            val resObj = gson.fromJson(body, JsonObject::class.java)
+                            val resObj = gson.fromJson(bodyString, JsonObject::class.java)
                             val key = resObj.get("pairingKey")?.asString ?: ""
                             val expires = resObj.get("expiresInSeconds")?.asInt ?: 300
                             mainHandler.post {
+                                // Save server URL to preferences so the background service knows where to connect!
+                                prefs.edit().putString("server_url", serverUrl).apply()
                                 pairingKey = key
                                 countdownSeconds = expires
                                 startPairingPoll(deviceId, serverUrl) { token ->
@@ -557,13 +566,35 @@ class MainActivity : ComponentActivity() {
                             mainHandler.post { Toast.makeText(this@MainActivity, "Failed parsing key.", Toast.LENGTH_LONG).show() }
                         }
                     } else {
-                        mainHandler.post { Toast.makeText(this@MainActivity, "Server connection failed (${response.code}). Retrying...", Toast.LENGTH_LONG).show() }
+                        var errMsg = "Connection failed (${response.code})"
+                        try {
+                            val errObj = gson.fromJson(bodyString, JsonObject::class.java)
+                            if (errObj.has("error")) {
+                                errMsg = errObj.get("error").asString
+                            }
+                        } catch (e: Exception) {}
+                        mainHandler.post { 
+                            Toast.makeText(this@MainActivity, errMsg, Toast.LENGTH_LONG).show() 
+                        }
                     }
                 }
             })
         }
 
-        // Trigger pair status check or generate key automatically on screen entry
+        // On companion screen load, if we have a token, start the service automatically
+        LaunchedEffect(deviceToken) {
+            if (deviceToken != null && !CompanionService.isServiceRunning) {
+                try {
+                    // Make sure server_url is written to SharedPreferences
+                    prefs.edit().putString("server_url", serverUrl).apply()
+                    startForegroundService(Intent(this@MainActivity, CompanionService::class.java))
+                    serviceActive = true
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed auto-starting service", e)
+                }
+            }
+        }
+
         LaunchedEffect(deviceToken) {
             if (deviceToken == null && pairingKey.isEmpty() && !isGeneratingKey) {
                 triggerPairRequest()
@@ -581,319 +612,397 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // On companion screen load, if we have a token, start the service automatically
-        LaunchedEffect(deviceToken) {
-            if (deviceToken != null && !CompanionService.isServiceRunning) {
-                try {
-                    startForegroundService(Intent(this@MainActivity, CompanionService::class.java))
-                    serviceActive = true
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Failed auto-starting service", e)
-                }
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp)
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "LockIT Companion",
-                    fontSize = 15.sp,
-                    color = Color(0xFF3B82F6),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable {
-                        // Double click logo/text for advanced settings
-                        showAdvancedSettings = true
-                    }
-                )
-                Text(
-                    text = "Reset",
-                    color = Color(0xFFEF4444),
-                    fontSize = 12.sp,
-                    modifier = Modifier.clickable {
-                        val intent = Intent(this@MainActivity, CompanionService::class.java)
-                        stopService(intent)
-                        prefs.edit().remove("app_role").remove("device_token").apply()
-                        deviceToken = null
-                        appRole.value = null
-                    }
-                )
-            }
-
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(text = "🔒", fontSize = 48.sp)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = "Companion Mode", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text(text = "Link to control from another device", fontSize = 12.sp, color = Color(0xFF94A3B8))
-            }
-
-            // Connection Link Status Card
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = "Status", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
-                                        shape = RoundedCornerShape(50)
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (serviceActive) "Connected" else "Awaiting Link",
-                                color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    if (deviceToken != null) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                onClick = {
-                                    val intent = Intent(this@MainActivity, CompanionService::class.java)
-                                    if (serviceActive) {
-                                        stopService(intent)
-                                        serviceActive = false
-                                    } else {
-                                        startForegroundService(intent)
-                                        serviceActive = true
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(if (serviceActive) "Pause Service" else "Resume Service", fontSize = 11.sp)
-                            }
-                            Button(
-                                onClick = {
-                                    val intent = Intent(this@MainActivity, CompanionService::class.java)
-                                    stopService(intent)
-                                    prefs.edit().remove("device_token").apply()
-                                    deviceToken = null
-                                    pairingKey = ""
-                                    countdownSeconds = 0
-                                    serviceActive = false
-                                    Toast.makeText(this@MainActivity, "Device Token Reset", Toast.LENGTH_SHORT).show()
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Unpair", fontSize = 11.sp)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Zero-Config Pairing Key Card
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+        Scaffold(
+            bottomBar = {
+                NavigationBar(
+                    containerColor = Color(0xFF111827),
+                    tonalElevation = 8.dp
                 ) {
-                    if (deviceToken == null) {
-                        if (pairingKey.isEmpty()) {
-                            Text(
-                                text = "Pairing Connection Offline",
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFEF4444),
-                                fontSize = 14.sp
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Unable to fetch a pairing key. Verify your server URL or network connection.",
-                                fontSize = 12.sp,
-                                color = Color(0xFF94A3B8),
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = { triggerPairRequest() },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(6.dp),
-                                enabled = !isGeneratingKey,
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
-                            ) {
-                                Text(if (isGeneratingKey) "Connecting..." else "Retry Fetching Pairing Key")
-                            }
-                        } else {
-                            Text(text = "Enter key in Web or Phone console to pair:", fontSize = 11.sp, color = Color(0xFF94A3B8))
-                            Spacer(modifier = Modifier.height(14.dp))
-                            
-                            // Display 8 individual rounded monospace digit boxes
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                pairingKey.forEach { char ->
-                                    Box(
-                                        modifier = Modifier
-                                            .size(width = 34.dp, height = 44.dp)
-                                            .background(
-                                                color = Color(0xFF1F2937),
-                                                shape = RoundedCornerShape(6.dp)
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = char.toString(),
-                                            color = Color(0xFF10B981),
-                                            fontSize = 20.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            Spacer(modifier = Modifier.height(14.dp))
-                            val minutes = countdownSeconds / 60
-                            val seconds = countdownSeconds % 60
-                            Text(
-                                text = String.format("Expires in: %02d:%02d", minutes, seconds),
-                                fontSize = 13.sp,
-                                color = Color(0xFFF59E0B),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            TextButton(
-                                onClick = {
-                                    stopPairingPoll()
-                                    pairingKey = ""
-                                    countdownSeconds = 0
-                                }
-                            ) {
-                                Text("Cancel", color = Color(0xFF94A3B8), fontSize = 12.sp)
-                            }
-                        }
-                    } else {
-                        Text(text = "Linked & Connected", fontWeight = FontWeight.Bold, color = Color(0xFF10B981), fontSize = 14.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Device Name: $deviceName", color = Color.White, fontSize = 12.sp)
-                        Text("Device ID: $deviceId", color = Color(0xFF94A3B8), fontSize = 10.sp)
-                    }
+                    NavigationBarItem(
+                        selected = currentTab == 0,
+                        onClick = { currentTab = 0 },
+                        icon = { Text("🛡️", fontSize = 20.sp) },
+                        label = { Text("Shield", fontSize = 11.sp, color = Color.White) }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == 1,
+                        onClick = { currentTab = 1 },
+                        icon = { Text("📊", fontSize = 20.sp) },
+                        label = { Text("Stats", fontSize = 11.sp, color = Color.White) }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == 2,
+                        onClick = { currentTab = 2 },
+                        icon = { Text("📜", fontSize = 20.sp) },
+                        label = { Text("Audits", fontSize = 11.sp, color = Color.White) }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == 3,
+                        onClick = { currentTab = 3 },
+                        icon = { Text("⚙️", fontSize = 20.sp) },
+                        label = { Text("Settings", fontSize = 11.sp, color = Color.White) }
+                    )
                 }
-            }
-
-            // Updater card
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+            },
+            containerColor = Color(0xFF090D16)
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(24.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "Software Updates", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = "Status: $updateStatusText", color = Color(0xFF94A3B8), fontSize = 12.sp)
-                    
-                    if (isDownloadingUpdate) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { downloadProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Color(0xFF3B82F6),
-                            trackColor = Color(0xFF1E293B),
+                // Header brand title
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "LockIT Client",
+                        fontSize = 16.sp,
+                        color = Color(0xFF3B82F6),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { showAdvancedSettings = true }
+                    )
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = if (deviceToken != null) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFF59E0B).copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = if (deviceToken != null) "PAIRED" else "UNLINKED",
+                            color = if (deviceToken != null) Color(0xFF10B981) else Color(0xFFF59E0B),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                // Render respective tab layouts
+                when (currentTab) {
+                    0 -> {
+                        // TAB 1: Shield Tab (Connection & pairing status)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(20.dp)
+                        ) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            // Pulsing glowing shield circle
+                            Box(
+                                modifier = Modifier
+                                    .size(100.dp)
+                                    .border(
+                                        width = 2.dp,
+                                        color = if (serviceActive) Color(0xFF10B981) else Color(0xFFEF4444),
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (serviceActive) "🛡️" else "🚨",
+                                    fontSize = 44.sp
+                                )
+                            }
+                            Text(
+                                text = if (serviceActive) "Shield Connection Active" else "Shield Offline",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
 
-                    if (updateDownloadUrl == null) {
-                        Button(
-                            onClick = {
-                                updateChecker.checkForUpdates(object : UpdateChecker.UpdateCallback {
-                                    override fun onChecking() { updateStatusText = "Checking..." }
-                                    override fun onNoUpdate() { updateStatusText = "App is up to date (v1.0.0)" }
-                                    override fun onUpdateAvailable(newVersion: String, downloadUrl: String) {
-                                        updateStatusText = "Update available: $newVersion"
-                                        updateDownloadUrl = downloadUrl
+                            // Zero-Config Pairing Key Card
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    if (deviceToken == null) {
+                                        if (pairingKey.isEmpty()) {
+                                            Text(text = "Connection Offline", fontWeight = FontWeight.Bold, color = Color(0xFFEF4444), fontSize = 14.sp)
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(
+                                                text = "Unable to fetch pairing details. Verify internet connection or server settings.",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF94A3B8),
+                                                textAlign = TextAlign.Center
+                                            )
+                                            Spacer(modifier = Modifier.height(14.dp))
+                                            Button(
+                                                onClick = { triggerPairRequest() },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("Retry Pairing Request")
+                                            }
+                                        } else {
+                                            Text(text = "Enter key in Web or Phone console to pair:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                pairingKey.forEach { char ->
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(width = 34.dp, height = 44.dp)
+                                                            .background(
+                                                                color = Color(0xFF1F2937),
+                                                                shape = RoundedCornerShape(6.dp)
+                                                            ),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            text = char.toString(),
+                                                            color = Color(0xFF10B981),
+                                                            fontSize = 20.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontFamily = FontFamily.Monospace
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            val minutes = countdownSeconds / 60
+                                            val seconds = countdownSeconds % 60
+                                            Text(
+                                                text = String.format("Expires in: %02d:%02d", minutes, seconds),
+                                                fontSize = 13.sp,
+                                                color = Color(0xFFF59E0B),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            TextButton(onClick = {
+                                                stopPairingPoll()
+                                                pairingKey = ""
+                                                countdownSeconds = 0
+                                            }) {
+                                                Text("Cancel", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                                            }
+                                        }
+                                    } else {
+                                        Text(text = "Security link active", color = Color(0xFF10B981), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Linked Server: $serverUrl", color = Color(0xFF94A3B8), fontSize = 11.sp, textAlign = TextAlign.Center)
+                                        Spacer(modifier = Modifier.height(14.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Button(
+                                                onClick = {
+                                                    val intent = Intent(this@MainActivity, CompanionService::class.java)
+                                                    if (serviceActive) {
+                                                        stopService(intent)
+                                                        serviceActive = false
+                                                    } else {
+                                                        startForegroundService(intent)
+                                                        serviceActive = true
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text(if (serviceActive) "Pause Service" else "Resume Service", fontSize = 11.sp)
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    val intent = Intent(this@MainActivity, CompanionService::class.java)
+                                                    stopService(intent)
+                                                    prefs.edit().remove("device_token").apply()
+                                                    deviceToken = null
+                                                    pairingKey = ""
+                                                    countdownSeconds = 0
+                                                    serviceActive = false
+                                                    Toast.makeText(this@MainActivity, "Device Token Reset", Toast.LENGTH_SHORT).show()
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Unpair", fontSize = 11.sp)
+                                            }
+                                        }
                                     }
-                                    override fun onDownloadProgress(progress: Int) {}
-                                    override fun onError(errorMsg: String) { updateStatusText = "Error: $errorMsg" }
-                                })
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                            shape = RoundedCornerShape(6.dp),
+                                }
+                            }
+                        }
+                    }
+                    1 -> {
+                        // TAB 2: Telemetry Stats Tab
+                        Text(text = "Live Telemetry Status", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                        
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Check for Updates", fontSize = 12.sp)
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Device Hardware Details", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Device Name", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                    Text(deviceName, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Device ID", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                    Text(deviceId.take(14) + "...", color = Color.White, fontSize = 13.sp)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Android Version", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                    Text("API " + Build.VERSION.SDK_INT, color = Color.White, fontSize = 13.sp)
+                                }
+                            }
                         }
-                    } else {
-                        Button(
-                            onClick = {
-                                isDownloadingUpdate = true
-                                updateChecker.downloadAndInstallApk(updateDownloadUrl!!, object : UpdateChecker.UpdateCallback {
-                                    override fun onChecking() {}
-                                    override fun onNoUpdate() {}
-                                    override fun onUpdateAvailable(newVersion: String, downloadUrl: String) {}
-                                    override fun onDownloadProgress(progress: Int) { downloadProgress = progress }
-                                    override fun onError(errorMsg: String) {
-                                        isDownloadingUpdate = false
-                                        updateStatusText = "Download error: $errorMsg"
-                                    }
-                                })
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isDownloadingUpdate
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Download and Install Update", fontSize = 12.sp)
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Power & Display Status", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                
+                                val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                                val isLocked = keyguardManager.isKeyguardLocked
+
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Display Lock State", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                    Text(
+                                        text = if (isLocked) "LOCKED" else "UNLOCKED",
+                                        color = if (isLocked) Color(0xFFF59E0B) else Color(0xFF10B981),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Power Connection", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                    Text("Battery Powered", color = Color.White, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                    2 -> {
+                        // TAB 3: Local Audits Log Tab
+                        Text(text = "Remote Command Log Timeline", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                        
+                        if (auditsList.size() == 0) {
+                            Text(
+                                text = "No commands received yet. When you trigger screen lock or ring from dashboard, logs will appear here.",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8),
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 40.dp)
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                for (i in 0 until auditsList.size()) {
+                                    val audit = auditsList.get(i).asJsonObject
+                                    val cmd = audit.get("command")?.asString ?: "Unknown"
+                                    val time = audit.get("timestamp")?.asString ?: ""
+                                    val status = audit.get("status")?.asString ?: "SUCCESS"
+                                    val details = audit.get("details")?.asString ?: ""
+
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.4f)),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(14.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(text = if (status == "SUCCESS") "✓" else "✗", color = if (status == "SUCCESS") Color(0xFF10B981) else Color(0xFFEF4444), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(text = cmd, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                                Text(text = time, color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                                if (details.isNotEmpty()) {
+                                                    Text(text = details, color = Color(0xFFEF4444), fontSize = 10.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    3 -> {
+                        // TAB 4: Local System Settings
+                        Text(text = "App Administration", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+
+                        // Reset Configuration Button
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Re-run Setup Wizard", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                Text("Allows you to reconfigure Accessibility permissions and Device Administrator policy files.", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Button(
+                                    onClick = {
+                                        prefs.edit().putBoolean("onboarded", false).apply()
+                                        onboarded.value = false
+                                        renderContent()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Re-run Permissions Wizard", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        // App Role Reset Button
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF111827).copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Reset Device App Role", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                Text("Switches the app role selection screen back to first launch setup, shutting down active listeners.", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Button(
+                                    onClick = {
+                                        val intent = Intent(this@MainActivity, CompanionService::class.java)
+                                        stopService(intent)
+                                        prefs.edit().remove("app_role").remove("device_token").apply()
+                                        deviceToken = null
+                                        appRole.value = null
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Reset Device Role", fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }
             }
-
-            // Permissions link footer
-            Text(
-                text = "Reconfigure System Permissions",
-                color = Color(0xFF3B82F6),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp)
-                    .clickable {
-                        prefs.edit().putBoolean("onboarded", false).apply()
-                        onboarded.value = false
-                        renderContent()
-                    }
-            )
         }
 
         // Advanced Settings Dialog (Hidden power feature)
